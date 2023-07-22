@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "PACKAGES"
+      - "justfile"
+      - ".github/.*"
+  schedule:
+    - cron: "0 0 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      env:
+        makepkg_flags: "-f"
+        pkgsdir: "/home/nonroot/pkgs"
+    permissions:
+      contents: write
+    steps:
+      - name: Install latest git
+        run: |
+          pacman -Syy --noconfirm git
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - name: Create non_root user
+        run: |
+          useradd nonroot && mkdir /home/nonroot && chown -R nonroot:nonroot /home/nonroot
+      - name: Set nonroot user in sudoers
+        run: |
+          echo 'nonroot ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+      - name: Set root user in sudoers
+        run: |
+          echo 'root ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+      - name: Enable multilib
+        run: |
+          echo -e '[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+      - name: Enable extra
+        run: |
+          sed -i '/^#\[extra\]/{N;s/#//g}' /etc/pacman.conf
+      - name: Install dependencies
+        run: |
+          pacman -Syyu --noconfirm && pacman -S --noconfirm just base-devel sudo xorgproto openssh
+      - name: Set source permissions
+        run: |
+          chown -R nonroot:nonroot .
+      - name: Build packages
+        run: |
+          sudo -u nonroot just makepkg_flags=$makepkg_flags pkgsdir=$pkgsdir all
+      - name: Set git safe directory
+        run: git config --global --add safe.directory '*'
+      - uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          # Optional glob pattern of files which should be added to the commit
+          # Defaults to all (.)
+          # See the `pathspec`-documentation for git
+          # - https://git-scm.com/docs/git-add#Documentation/git-add.txt-ltpathspecgt82308203
+          # - https://git-scm.com/docs/gitglossary#Documentation/gitglossary.txt-aiddefpathspecapathspec
+          file_pattern: "*.pkg.tar.zst xerolinux-.*"
+
+          # Optional commit user and author settings
+          commit_user_name: Ben Mezger Bot # defaults to "github-actions[bot]"
+          commit_user_email: my-github-actions-bot@example.org # defaults to "41898282+github-actions[bot]@users.noreply.github.com"
+          commit_author: Ben Mezger Bot <me@benmezger.nl> # defaults to author of the commit that triggered the run
